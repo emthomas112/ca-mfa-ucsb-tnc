@@ -1,0 +1,396 @@
+---
+title: "calrecyled data wrangling"
+author: "E.M.Thomas"
+date: "2024-02-06"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+```
+
+
+```{r}
+setwd(here("data"))
+
+# List all Excel files in your directory
+excel_files <- list.files("business group", pattern = "\\.xlsx$", full.names = TRUE)
+
+# Create an empty list to store dataframes
+dfs <- list()
+
+# Loop through each Excel file, read it, and append to dfs list
+for (file in excel_files) {
+  df <- read_excel(file, sheet = 2)
+  dfs[[file]] <- df
+}
+
+# Combine all dataframes into one
+combined_df <- bind_rows(dfs, .id = "file_name")
+```
+
+# This is to check for any NA values in the raw data 
+```{r}
+# Group the combined dataframe by county and count the number of NA values in each county
+non_na_counties <- combined_df %>%
+  select(file_name, `Material Category`) %>% 
+  na.omit() 
+
+unique_non_na <- unique(non_na_counties$file_name)
+
+na_counties <- combined_df %>% 
+  filter(!file_name %in% unique_non_na) %>% 
+  select(file_name)
+
+unique_na <- data.frame(unique(na_counties$file_name))
+
+#write_csv(unique_na, "NA Counties_021224.csv")  
+
+### check for NA values
+combined_df_check <- combined_df %>% 
+  na.omit() # looks good
+
+```
+
+
+
+```{r}
+### Save the plastic data 
+bg_eol_df <- combined_df %>% 
+  clean_names() %>% 
+  select(material_category, material_type, jurisdiction_s, material_tons_disposed, material_tons_in_curbside_recycle, material_tons_in_curbside_organics, material_tons_in_other_diversion, material_tons_generated_sum_of_all_streams) %>% 
+  filter(material_category == "Plastic")
+  
+write.csv(bg_eol_df, "Business Group Waste Stream by County.csv", row.names=FALSE)
+```
+
+### do the same process for residential, combine into one df called ca_eol_df
+
+```{r}
+### read in resin classification conversion table
+resin_conversion_df <- read_excel(here("data/other data/Resin Conversion.xlsx")) %>% clean_names()
+
+### for now rename bg to ca
+ca_eol_df <- bg_eol_df 
+
+# Perform a left join between ca_eol_df and resin_conversion_df based on the material_type column
+ca_eol_df <- merge(bg_eol_df, resin_conversion_df, by.x = "material_type", by.y = "cal_recycle_classification", all.x = TRUE) %>% 
+  select(!material_category) %>% 
+  rename(county = jurisdiction_s) %>% 
+  mutate(milbrandt_classification = str_trim(milbrandt_classification))
+
+```
+
+
+# Apply the conversion formulas
+```{r}
+### PET 
+pet_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "PETbc", material_tons_disposed, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_disposed, 0)))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "PETbc", material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_in_curbside_recycle, 0)))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "PETbc", material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_in_curbside_organics, 0)))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "PETbc", material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_in_other_diversion, 0)))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "PETbc", material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_generated_sum_of_all_streams, 0))))) %>% 
+  mutate(resin_type = "PET")
+
+```
+
+
+```{r}
+### HDPE
+hdpe_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_disposed, 0))))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_in_curbside_recycle,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_in_curbside_recycle, 0))))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_in_curbside_organics,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_in_curbside_organics, 0))))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_in_other_diversion,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_in_other_diversion, 0))))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_generated_sum_of_all_streams,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_generated_sum_of_all_streams, 0)))))) %>% 
+  mutate(resin_type = "HDPE")
+
+```
+
+
+```{r}
+### PP
+pp_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_disposed, 0))))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_in_curbside_recycle,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_in_curbside_recycle, 0))))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_in_curbside_organics,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_in_curbside_organics, 0))))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_in_other_diversion,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_in_other_diversion, 0))))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_generated_sum_of_all_streams,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_generated_sum_of_all_streams, 0)))))) %>% 
+  mutate(resin_type = "PP")
+
+```
+
+```{r}
+### LPDE/LLPDE
+ldpe_lldpe_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_disposed, 0))))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_in_curbside_recycle,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_in_curbside_recycle, 0))))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_in_curbside_organics,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_in_curbside_organics, 0))))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_in_other_diversion,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_in_other_diversion, 0))))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_generated_sum_of_all_streams,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_generated_sum_of_all_streams, 0)))))) %>% 
+  mutate(resin_type = "LDPE/LLDPE")
+
+```
+
+
+```{r}
+### PVC
+pvc_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_disposed, 0))))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_in_curbside_recycle,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_in_curbside_recycle, 0))))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_in_curbside_organics,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_in_curbside_organics, 0))))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_in_other_diversion,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_in_other_diversion, 0))))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_generated_sum_of_all_streams,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_generated_sum_of_all_streams, 0)))))) %>% 
+  mutate(resin_type = "PVC")
+
+```
+
+```{r}
+### Other Resins
+other_resins_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_disposed,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_disposed, 0))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_in_curbside_recycle,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_in_curbside_recycle, 0))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_in_curbside_organics,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_in_curbside_organics, 0))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_in_other_diversion,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_in_other_diversion, 0))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_generated_sum_of_all_streams,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_generated_sum_of_all_streams, 0)))) %>% 
+  mutate(resin_type = "Other Resins")
+
+
+```
+
+
+```{r}
+### seeing if the data adds up if I add in PS with missing coefficent values
+ps_df <- ca_eol_df %>% 
+  group_by(county) %>% 
+  summarize(material_tons_disposed = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_disposed, 0))))),
+            material_tons_in_curbside_recycle = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_in_curbside_recycle, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_in_curbside_recycle, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_in_curbside_recycle,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_in_curbside_recycle, 0))))),
+            material_tons_in_curbside_organics = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_in_curbside_organics, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_in_curbside_organics, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_in_curbside_organics,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_in_curbside_organics, 0))))),
+            material_tons_in_other_diversion = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_in_other_diversion, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_in_other_diversion, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_in_other_diversion,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_in_other_diversion, 0))))),
+            material_tons_generated_sum_of_all_streams = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_generated_sum_of_all_streams, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_generated_sum_of_all_streams, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_generated_sum_of_all_streams,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_generated_sum_of_all_streams, 0)))))) %>% 
+  mutate(resin_type = "PS")
+  
+```
+
+
+
+```{r}
+# merge dataframes
+
+final_resin_df <- bind_rows(pet_df, hdpe_df, pp_df, ldpe_lldpe_df, pvc_df, other_resins_df) 
+final_resin_df$county <- gsub("\\(Countywide\\)$", "", final_resin_df$county)
+final_resin_df$county <- str_trim(final_resin_df$county)
+
+resin_summary_df <- final_resin_df %>%
+              group_by(resin_type, county) %>%
+              summarize(total_tons_generated = sum(material_tons_generated_sum_of_all_streams)) %>%
+              pivot_wider(names_from = resin_type, values_from = total_tons_generated) %>%
+  clean_names() %>% 
+  select(county, pet, hdpe, pp, ldpe_lldpe, pvc, other_resins)
+
+write_csv(final_resin_df, "Final Resin Data.csv")
+```
+
+
+# Compare Milbrandt reclassification data with raw data
+
+```{r}
+# Sum raw calrecycle data by milbrandt classification
+calrecycle_class_summary <- ca_eol_df %>% 
+  group_by(milbrandt_classification) %>% 
+  summarize(material_tons_disposed = sum(material_tons_generated_sum_of_all_streams))
+
+# apply the formulas to the total material tons generated 
+calrecycle_resin_summary <- calrecycle_class_summary %>% 
+  mutate(PET = sum(if_else(milbrandt_classification == "PETbc", material_tons_disposed, 
+                          if_else(milbrandt_classification == "DP", 0.046 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * material_tons_disposed, 0))))) %>% 
+  mutate(HDPE = 
+              sum(if_else(milbrandt_classification == "HDPEbc", material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.12 * material_tons_disposed, 0)))))) %>% 
+  mutate(PP = sum(if_else(milbrandt_classification == "MP", 0.65 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.30 * material_tons_disposed, 0)))))) %>% 
+  mutate('LDPE/LLDPE' = sum(if_else(milbrandt_classification == "MP", 0.1 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.18 * material_tons_disposed, 0)))))) %>% 
+  mutate(PVC = sum(if_else(milbrandt_classification == "MP", 0.025 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.036 * material_tons_disposed, 0)))))) %>% 
+  mutate('Other Resins' = sum(if_else(milbrandt_classification == "DP", 0.279 * material_tons_disposed,
+                          if_else(milbrandt_classification == "RC", 0.194 * material_tons_disposed, 0)))) %>% 
+  mutate(PS = sum(if_else(milbrandt_classification == "MP", 0.225 * material_tons_disposed, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * material_tons_disposed, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * material_tons_disposed,
+                                          if_else(milbrandt_classification == "RC", 0.09 * material_tons_disposed, 0)))))) %>% 
+  select(-milbrandt_classification, -material_tons_disposed) %>% 
+  pivot_longer(everything(), names_to = 'resin_type', values_to = 'calrecycle_total_tons_generated')
+  
+  
+calrecycle_resin_summary <- calrecycle_resin_summary %>% filter(!row_number() %in% c(8:42))
+
+milbrandt_resin_summary <- final_resin_df %>% 
+  group_by(resin_type) %>% 
+  summarise(milbrandt_total_tons_generated = sum(material_tons_generated_sum_of_all_streams))
+
+comparison_df <- left_join(milbrandt_resin_summary, calrecycle_resin_summary, by = 'resin_type')
+
+```
+
+
+```{r}
+milbrandt_total_sum <- resin_summary_df %>%
+  select(-county) %>% 
+  summarise(total = sum(rowSums(.)))
+
+calrecycle_total_sum <- bg_eol_df %>% 
+  select(material_tons_generated_sum_of_all_streams) %>% 
+  summarise(total = sum(rowSums(.)))
+
+```
+
+

@@ -1,0 +1,164 @@
+---
+title: "WCS webscraping"
+author: "E.M.Thomas"
+date: "2024-06-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rvest)
+library(httr)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(RSelenium)
+```
+
+
+```{r}
+# Load necessary libraries
+library(rvest)
+library(httr)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(RSelenium)
+
+# Start a remote Selenium server
+remDr <- remoteDriver(remoteServerAddr = "localhost", port = 4445L, browserName = "chrome")
+remDr$open()
+
+# Base URL
+base_url <- "https://www2.calrecycle.ca.gov/WasteCharacterization/BusinessGroupStreams?lg=1001&cy=1"
+
+# List of counties and material types
+counties <- c("Alameda", "Alpine", "Amador", "Butte", "Calaveras", "Colusa", "Contra Costa", 
+              "Del Norte", "El Dorado", "Fresno", "Glenn", "Humboldt", "Imperial", "Inyo", 
+              "Kern", "Kings", "Lake", "Lassen", "Los Angeles", "Madera", "Marin", "Mariposa", 
+              "Mendocino", "Merced", "Modoc", "Mono", "Monterey", "Napa", "Nevada", "Orange", 
+              "Placer", "Plumas", "Riverside", "Sacramento", "San Benito", "San Bernardino", 
+              "San Diego", "San Francisco", "San Joaquin", "San Luis Obispo", "San Mateo", 
+              "Santa Barbara", "Santa Clara", "Santa Cruz", "Shasta", "Sierra", "Siskiyou", 
+              "Solano", "Sonoma", "Stanislaus", "Sutter", "Tehama", "Trinity", "Tulare", 
+              "Tuolumne", "Ventura", "Yolo", "Yuba")
+
+material_types <- c("PETE Plastic Containers", "HDPE Plastic Containers", "Miscellaneous Plastic Containers",
+                    "Plastic Trash Bags", "Plastic Grocery and Other Merchandise Bags",
+                    "Non-Bag Commercial and Industrial Packaging Film", "Film Products",
+                    "Other Film - Other", "Durable Plastic Items - #2 and #5 Bulky Rigids",
+                    "Durable Plastic Items - Other", "Remainder / Composite Plastic")
+
+# Function to get data for a specific county and material type
+get_data <- function(county, material_type) {
+  remDr$navigate(base_url)
+  
+  # Wait for the page to load
+  Sys.sleep(5)
+  
+  # Select the county
+  county_dropdown <- tryCatch({
+    remDr$findElement(using = "xpath", "//*[@id='CountyID']")
+  }, error = function(e) {
+    message("County dropdown not found")
+    return(NULL)
+  })
+  
+  if (is.null(county_dropdown)) return(NULL)
+  
+  county_element <- tryCatch({
+    county_dropdown$findChildElement(using = "xpath", paste0("//option[text()='", county, "']"))
+  }, error = function(e) {
+    message("County element not found for ", county)
+    return(NULL)
+  })
+  
+  if (is.null(county_element)) return(NULL)
+  
+  county_element$clickElement()
+  
+  # Wait for the material type dropdown to update
+  Sys.sleep(2)
+  
+  # Select the material type
+  material_type_dropdown <- tryCatch({
+    remDr$findElement(using = "xpath", "//*[@id='MaterialTypeID']")
+  }, error = function(e) {
+    message("Material type dropdown not found")
+    return(NULL)
+  })
+  
+  if (is.null(material_type_dropdown)) return(NULL)
+  
+  material_type_element <- tryCatch({
+    material_type_dropdown$findChildElement(using = "xpath", paste0("//option[text()='", material_type, "']"))
+  }, error = function(e) {
+    message("Material type element not found for ", material_type)
+    return(NULL)
+  })
+  
+  if (is.null(material_type_element)) return(NULL)
+  
+  material_type_element$clickElement()
+  
+  # Wait for the submit button to be present
+  Sys.sleep(2)
+  
+  # Click the submit button
+  submit_button <- tryCatch({
+    remDr$findElement(using = "xpath", "//input[@type='submit' and @value='Search']")
+  }, error = function(e) {
+    message("Submit button not found")
+    return(NULL)
+  })
+  
+  if (is.null(submit_button)) return(NULL)
+  
+  submit_button$clickElement()
+  
+  # Wait for the page to load
+  Sys.sleep(5)
+  
+  # Scrape the table
+  page_source <- remDr$getPageSource()[[1]]
+  page <- read_html(page_source)
+  data <- page %>% html_nodes("table") %>% html_table(fill = TRUE)
+  
+  if (length(data) > 0) {
+    df <- data[[1]]
+    df$County <- county
+    df$MaterialType <- material_type
+    return(df)
+  } else {
+    return(NULL)
+  }
+}
+
+# Initialize a list to store all data
+all_data <- list()
+
+# Loop through each county and material type to get the data
+for (county in counties) {
+  for (material_type in material_types) {
+    message("Processing County: ", county, ", Material Type: ", material_type)
+    data <- get_data(county, material_type)
+    if (!is.null(data)) {
+      all_data <- append(all_data, list(data))
+    }
+  }
+}
+
+# Combine all data into a single data frame
+combined_data <- bind_rows(all_data)
+
+# View the combined data
+print(combined_data)
+
+# Save the data to a CSV file
+write.csv(combined_data, "calrecycle_data.csv", row.names = FALSE)
+
+
+
+
+```
+

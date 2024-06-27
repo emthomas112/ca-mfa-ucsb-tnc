@@ -1,0 +1,308 @@
+---
+title: "calrecycle commercial and residential"
+author: "E.M.Thomas"
+date: "2024-03-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+library(writexl)
+```
+# 2014 Waste Characterization Study
+### Aggregated by county, material type, and business group / residential 
+
+# Read in busines group data
+```{r}
+setwd(here("raw data/CalRecycle/Generator-based WCS/Business Group"))
+
+# List all Excel files in your directory
+excel_files <- list.files(pattern = "\\.xlsx$", full.names = TRUE)
+
+# Create an empty list to store dataframes
+dfs <- list()
+
+# Loop through each Excel file, read it, and append to dfs list
+for (file in excel_files) {
+  df <- read_excel(file, sheet = 2)
+  dfs[[file]] <- df
+}
+
+# Combine all dataframes into one
+combined_bg_df <- bind_rows(dfs, .id = "file_name")
+```
+
+## check for NAs
+```{r}
+non_na_counties <- combined_bg_df %>%
+  select(file_name, `Material Category`) %>% 
+  na.omit() 
+
+unique_non_na <- unique(non_na_counties$file_name)
+
+na_counties <- combined_bg_df %>% 
+  filter(!file_name %in% unique_non_na) %>% 
+  select(file_name)
+
+unique_na <- data.frame(unique(na_counties$file_name)) ### no NA values good
+```
+
+## write plastic data to csv
+```{r}
+### Save the plastic data 
+bg_plastic_waste_streams_df <- combined_bg_df %>% 
+  clean_names() %>% 
+  filter(material_category == "Plastic") %>% 
+  select(material_type, jurisdiction_s, material_tons_disposed, material_tons_in_curbside_recycle, material_tons_in_curbside_organics, material_tons_in_other_diversion, material_tons_generated_sum_of_all_streams) %>% 
+  rename(county = jurisdiction_s)
+
+#write.csv(bg_plastic_waste_streams_df, "Business Group Waste Stream by County.csv", row.names=FALSE)
+
+bg_plastic_waste_df <- bg_plastic_waste_streams_df %>% 
+  select(material_type, county, material_tons_disposed) #changing this to disposed only to match same composition as residential 5/21
+
+#write.csv(bg_plastic_waste_df, "Business Group Waste by County and Material Type.csv", row.names=FALSE)
+
+bg_plastic_sum <- bg_plastic_waste_df %>%
+  select(material_type, county, material_tons_disposed) %>% 
+  group_by(county) %>%
+  summarize(material_tons_disposed = sum(material_tons_disposed))
+  
+#write.csv(bg_plastic_sum, "Business Group Total Waste Summarized by County.csv", row.names=FALSE)
+
+```
+
+
+# Read in residential data
+```{r}
+setwd(here("raw data/CalRecycle/Generator-based WCS/Residential"))
+
+# List all Excel files in your directory
+excel_files <- list.files(pattern = "\\.xlsx$", full.names = TRUE)
+
+# Create an empty list to store dataframes
+dfs <- list()
+
+# Loop through each Excel file, read it, and append to dfs list
+for (file in excel_files) {
+  df <- read_excel(file, sheet = 2)
+  dfs[[file]] <- df
+}
+
+# Combine all dataframes into one
+combined_res_df <- bind_rows(dfs, .id = "file_name")
+```
+
+## check for NAs
+```{r}
+non_na_counties <- combined_res_df %>%
+  select(file_name, `Material Category`) %>% 
+  na.omit() 
+
+unique_non_na <- unique(non_na_counties$file_name)
+
+na_counties <- combined_res_df %>% 
+  filter(!file_name %in% unique_non_na) %>% 
+  select(file_name)
+
+unique_na <- data.frame(unique(na_counties$file_name)) ### no NA values good
+```
+
+
+## write residential plastic waste to csv
+```{r}
+### Save the plastic data 
+res_plastic_waste_df <- combined_res_df %>% 
+  clean_names() %>% 
+  filter(material_category == "Plastic") %>% 
+  select(material_type, jurisdiction_s, total_residential_tons) %>% 
+  rename(county = jurisdiction_s)
+  
+#write.csv(res_plastic_waste_df, "Residential Total Waste by County.csv", row.names=FALSE)
+
+res_plastic_sum <- res_plastic_waste_df %>%
+  group_by(county) %>%
+  summarize(total_residential_tons = sum(total_residential_tons))
+```
+
+# Merge commericial and residential data
+```{r}
+# Merge the two data frames based on 'material_type' and 'county'
+total_plastic_waste_df <- left_join(bg_plastic_waste_df, res_plastic_waste_df, 
+                       by = c("material_type", "county"))
+
+# Calculate the sum of 'material_tons_generated_sum_of_all_streams' and 'total_residential_tons'for every county and material_type observation that is the same between the two data frames
+total_plastic_waste_df <- total_plastic_waste_df %>%
+  mutate(total_plastic_waste = material_tons_disposed + total_residential_tons) %>%
+  select(material_type, county, total_plastic_waste)
+```
+
+
+# Apply Milbrandt conversion formulas
+
+```{r}
+### read in resin classification conversion table
+resin_conversion_df <- read_excel(here("raw data/Resin Conversion.xlsx")) %>% clean_names()
+
+# Perform a left join between ca_eol_df and resin_conversion_df based on the material_type column
+pw_merged_df <- merge(total_plastic_waste_df, resin_conversion_df, by.x = "material_type", by.y = "cal_recycle_classification", all.x = TRUE) %>% 
+  mutate(milbrandt_classification = str_trim(milbrandt_classification))
+```
+
+## PET
+```{r}
+### PET 
+pet_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(pet = 
+              sum(if_else(milbrandt_classification == "PETbc", total_plastic_waste, 
+                          if_else(milbrandt_classification == "DP", 0.046 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "RC", 0.08 * total_plastic_waste, 0)))))
+```
+
+## HDPE
+```{r}
+hdpe_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(hdpe = 
+              sum(if_else(milbrandt_classification == "HDPEbc", total_plastic_waste, 
+                          if_else(milbrandt_classification == "FWB", 0.17 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "DP", 0.114 * total_plastic_waste,
+                                          if_else(milbrandt_classification == "RC", 0.12 * total_plastic_waste, 0))))))
+```
+
+
+## PP
+```{r}
+pp_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(pp = 
+              sum(if_else(milbrandt_classification == "MP", 0.65 * total_plastic_waste, 
+                          if_else(milbrandt_classification == "FWB", 0.1 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "DP", 0.336 * total_plastic_waste,
+                                          if_else(milbrandt_classification == "RC", 0.30 * total_plastic_waste, 0))))))
+```
+
+## LDPE/LLDPE
+```{r}
+ldpe_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(ldpe = 
+              sum(if_else(milbrandt_classification == "MP", 0.1 * total_plastic_waste, 
+                          if_else(milbrandt_classification == "FWB", 0.69 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "DP", 0.15 * total_plastic_waste,
+                                          if_else(milbrandt_classification == "RC", 0.18 * total_plastic_waste, 0))))))
+```
+
+## PVC
+```{r}
+pvc_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(pvc = 
+              sum(if_else(milbrandt_classification == "MP", 0.025 * total_plastic_waste, 
+                          if_else(milbrandt_classification == "FWB", 0.013 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "DP", 0.018 * total_plastic_waste,
+                                          if_else(milbrandt_classification == "RC", 0.036 * total_plastic_waste, 0))))))
+```
+
+## Other resins
+```{r}
+other_resins_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(other_resins = 
+              sum(if_else(milbrandt_classification == "DP", 0.279 * total_plastic_waste,
+                          if_else(milbrandt_classification == "RC", 0.194 * total_plastic_waste, 0))))
+```
+
+
+## PS
+```{r}
+ps_df <- pw_merged_df %>% 
+  group_by(county) %>% 
+  summarize(ps = 
+              sum(if_else(milbrandt_classification == "MP", 0.225 * total_plastic_waste, 
+                          if_else(milbrandt_classification == "FWB", 0.027 * total_plastic_waste, 
+                                  if_else(milbrandt_classification == "DP", 0.057 * total_plastic_waste,
+                                          if_else(milbrandt_classification == "RC", 0.09 * total_plastic_waste, 0))))))
+```
+
+## Combine resin dfs
+```{r}
+final_resin_df <- pet_df %>%
+  left_join(pp_df, by = "county") %>%
+  left_join(pvc_df, by = "county") %>%
+  left_join(hdpe_df, by = "county") %>%
+  left_join(ldpe_df, by = "county") %>%
+  left_join(ps_df, by = "county") %>%
+  left_join(other_resins_df, by = "county") %>% 
+  mutate(total_plastic_waste = pet + pp + pvc + hdpe + ldpe + ps + other_resins)
+
+final_resin_df$county <- gsub("\\(Countywide\\)$", "", final_resin_df$county)
+final_resin_df$county <- str_trim(final_resin_df$county)
+
+#convert short tons to metric tons
+final_resin_df <- final_resin_df %>% 
+  mutate(across(where(is.numeric), ~ ./1.102))
+
+#write_csv(final_resin_df, "Commercial and Residential Resin Data.csv")
+```
+
+## Check the sums 
+```{r}
+plastic_waste_sums_df <- bg_plastic_sum %>% 
+  left_join(res_plastic_sum, by='county') %>% 
+  mutate(og_total_plastic_waste = material_tons_disposed + total_residential_tons) %>%
+  select(county, og_total_plastic_waste) %>% 
+  mutate(across(where(is.numeric), ~ ./1.102))
+
+plastic_waste_sums_df$county <- gsub("\\(Countywide\\)$", "", plastic_waste_sums_df$county)
+plastic_waste_sums_df$county <- str_trim(plastic_waste_sums_df$county)
+
+check_plastic_waste_df <- plastic_waste_sums_df %>% 
+  left_join(final_resin_df, by = 'county') %>% 
+  select(county, og_total_plastic_waste, total_plastic_waste)
+```
+
+## Compare w/ interpolated milbrandt
+```{r}
+milbrandt_interpolated <- read_excel(here("raw data/milbradt_interpolated.xlsx"),2) %>% select(county, resin, mt_interpolated) %>% 
+  pivot_wider(names_from = resin, values_from = mt_interpolated) %>% 
+  clean_names() %>% 
+  select(county, pet_mt, pp_mt, pvc_mt, hdpe_mt, ldpe_mt, ps_mt, other_mt, total_mt)
+
+# Sort dataframes by county
+milbrandt_interpolated <- milbrandt_interpolated[order(milbrandt_interpolated$county), ]
+final_resin_df <- final_resin_df[order(final_resin_df$county), ]
+
+# Now you can proceed with the subtraction
+abs_diff <- milbrandt_interpolated[, -1] - final_resin_df[, -1]
+
+# Extract the "county" column from one of the sorted dataframes (they should be the same)
+county_column <- milbrandt_interpolated$county
+
+# Combine the "county" column with abs_diff
+abs_diff_with_county <- cbind(county = county_column, abs_diff)
+
+# Calculate the percent difference
+percent_diff <- (abs_diff / final_resin_df[, -1]) * 100
+
+# Combine the "county" column with percent_diff
+percent_diff_with_county <- cbind(county = county_column, percent_diff)  
+
+```
+
+```{r}
+# Write dataframes to the same Excel file
+write_xlsx(list("Milbrandt Interpolated Waste Data (metric tons)" = milbrandt_interpolated, "CalRecycle Converted Resin Data (metric tons)" = final_resin_df, "Absolute Difference" = abs_diff_with_county,"Percent Difference" = percent_diff_with_county),
+           path = here("processed data/CalRecycle-Milbrandt Comparison_v2.xlsx"),
+           col_names = TRUE)
+```
+
+
+

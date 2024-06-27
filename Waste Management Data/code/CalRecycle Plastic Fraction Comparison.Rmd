@@ -1,0 +1,195 @@
+---
+title: "CalRecycle Plastic Fraction Comparison"
+author: "E.M.Thomas"
+date: "2024-05-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+library(writexl)
+```
+
+```{r}
+### Read in resin classification conversion table
+resin_conversion_df <- read_excel(here("raw data/Resin Conversion.xlsx")) %>% 
+  clean_names() %>% 
+  rename(material_type = cal_recycle_classification) %>% 
+  rename(resin_type = milbrandt_classification) 
+
+
+### Read in 2008, 2014, 2018, and 2021 datasets
+cal_waste_2008_df <- read_excel(here("raw data/CalRecycle/Disposal-based WCS/CalRecycle 2008 Statewide Disposal.xlsx")) %>% clean_names() %>% 
+  select(1,3) %>% 
+  rename(material_type = 1) 
+
+cal_waste_2014_df <- read_excel(here("raw data/CalRecycle/Disposal-based WCS/CalRecycle 2014 Statewide Disposal.xlsx")) %>% clean_names() %>% 
+  select(1,3) %>% 
+  rename(material_type = 1)
+
+cal_waste_2018_df <- read_excel(here("raw data/CalRecycle/Disposal-based WCS/CalRecycle 2018 Statewide Disposal.xlsx")) %>% clean_names() %>% 
+  select(1,3) %>% 
+  rename(material_type = 1)
+
+cal_waste_2021_df <- read_excel(here("raw data/CalRecycle/Disposal-based WCS/CalRecycle 2021 Statewide Disposal.xlsx")) %>% clean_names() %>% 
+  select(1,3) %>% 
+  rename(material_type = 1)
+```
+
+
+```{r}
+### Convert short tons to metric tons
+cal_waste_2008_df <- cal_waste_2008_df %>% 
+  mutate(estimated_tonnage = estimated_tonnage/1.102)
+
+cal_waste_2014_df <- cal_waste_2014_df %>% 
+  mutate(estimated_tonnage = estimated_tonnage/1.102)
+
+cal_waste_2018_df <- cal_waste_2018_df %>% 
+  mutate(estimated_tonnage = estimated_tonnage/1.102)
+
+cal_waste_2021_df <- cal_waste_2021_df %>% 
+  mutate(estimated_tonnage = estimated_tonnage/1.102)
+
+```
+
+
+```{r}
+resin_conversion_func <- function(cal_waste_df, resin_conversion_df) {
+  resin_conversion <- resin_conversion_df$resin_type
+  resin_material <- resin_conversion_df$material_type
+  
+  # Assign the milbrandt resin classifications to each material type  
+  cal_waste_df$resin_conversion <- sapply(cal_waste_df$material_type, function(mat) {
+    resin <- resin_conversion[resin_material == mat]
+    if (length(resin) > 0) {
+      return(resin)
+    } else {
+      return("Other")
+    }
+  })
+  
+  # Preparing for resin conversion
+  df <- cal_waste_df %>%
+    pivot_wider(names_from = resin_conversion, values_from = estimated_tonnage, values_fill = 0) %>%
+    select(-material_type) %>%
+    mutate(across(everything(), as.numeric)) %>% 
+    summarise_all(sum) %>% 
+    rename(pet = PETbc, hdpe = HDPEbc) %>% 
+    clean_names()
+  
+  # Initialize missing columns with zero if they don't exist
+  if (!"pp" %in% colnames(df)) df$pp <- 0
+  if (!"mp" %in% colnames(df)) df$mp <- 0
+  if (!"fwb" %in% colnames(df)) df$fwb <- 0
+  if (!"dp" %in% colnames(df)) df$dp <- 0
+  if (!"rc" %in% colnames(df)) df$rc <- 0
+  
+  # Apply resin conversion formulas to new dataframe
+  resin_df <- data.frame(
+    PET = df$pet + df$dp * 0.046 + df$rc * 0.08,
+    HDPE = df$hdpe + df$fwb * 0.17 + df$dp * 0.114 + df$rc * 0.12,
+    PP = df$pp + df$mp * 0.65 + df$fwb * 0.1 + df$dp * 0.336 + df$rc * 0.30,
+    LDPE_LLDPE = df$mp * 0.1 + df$fwb * 0.69 + df$dp * 0.15 + df$rc * 0.18,
+    PVC = df$mp * 0.025 + df$fwb * 0.013 + df$dp * 0.018 + df$rc * 0.036,
+    Other_Resins = df$dp * 0.279 + df$rc * 0.194,
+    PS = df$mp * 0.225 + df$fwb * 0.027 + df$dp * 0.057 + df$rc * 0.09
+  )
+  
+  return(resin_df)
+}
+
+converted_2008_df <- resin_conversion_func(cal_waste_df = cal_waste_2008_df, resin_conversion_df = resin_conversion_df)
+
+converted_2014_df <- resin_conversion_func(cal_waste_df = cal_waste_2014_df, resin_conversion_df = resin_conversion_df)
+
+converted_2018_df <- resin_conversion_func(cal_waste_df = cal_waste_2018_df, resin_conversion_df = resin_conversion_df)
+
+converted_2021_df <- resin_conversion_func(cal_waste_df = cal_waste_2021_df, resin_conversion_df = resin_conversion_df)
+
+# Combine into one dataframe
+converted_resin_final_df <- bind_rows(
+  converted_2021_df,
+  converted_2018_df,
+  converted_2014_df,
+  converted_2008_df
+)
+
+rownames(converted_resin_final_df) <- c(2021, 2018, 2014, 2008) 
+
+converted_resin_final_df <- data.frame(Year = rownames(converted_resin_final_df), converted_resin_final_df, row.names = NULL)
+
+```
+
+
+
+
+
+### TONNAGE ONLY
+```{r}
+# Write both dataframes to the same Excel file
+#write_xlsx(list("Converted Resin Tonnage" = converted_resin_final_df, 
+#                "2008 Raw_Mt" = cal_waste_2008_df, 
+#                "2014 Raw_Mt" = cal_waste_2014_df,
+#                "2018 Raw Mt" = cal_waste_2018_df,
+#                "2021 Raw Mt" = cal_waste_2021_df),
+#           path = here("processed data/CalRecycle Plastic Waste by Resin and Year.xlsx"),
+#           col_names = TRUE)
+
+write_xlsx(converted_resin_final_df, here("processed data/Converted WCS Resin Data 2008-2021.xlsx")) #6/27 2021 converted resin data still off from Excel calculated version
+```
+
+### 6/25 didn't get beyond this point in looking over the code... 
+### LOOKING FOR MISSING DATA  6/27 DONT RUN
+```{r}
+# Function to check for non-matching observations between two dataframes
+check_non_matching_observations <- function(df1, df2, key_columns) {
+  # Ensure key columns are present in both dataframes
+  if (!all(key_columns %in% colnames(df1)) | !all(key_columns %in% colnames(df2))) {
+    stop("Key columns must be present in both dataframes")
+  }
+  
+  # Create unique keys for both dataframes
+  df1$key <- apply(df1[key_columns], 1, paste, collapse = "_")
+  df2$key <- apply(df2[key_columns], 1, paste, collapse = "_")
+  
+  # Find non-matching keys
+  non_matching_keys <- setdiff(df1$key, df2$key)
+  
+  # Extract the non-matching observations from df1
+  non_matching_observations <- df1[df1$key %in% non_matching_keys, ]
+  
+  # Remove the temporary key column
+  non_matching_observations$key <- NULL
+  
+  return(non_matching_observations)
+}
+
+# Example usage:
+# Assuming df1 and df2 are your dataframes and "county" is the key column
+non_matching_observations <- check_non_matching_observations(df1 = cal_waste_2021_df, df2 = resin_conversion_df, key_columns = "material_type")
+print(non_matching_observations)
+
+```
+
+
+### Get the plastic fractions in a dataframe
+
+### write to excel
+```{r}
+converted_resin_final_df <- data.frame(Year = rownames(converted_resin_final_df), converted_resin_final_df, row.names = NULL)
+resin_fraction_df <- data.frame(Year = rownames(resin_fraction_df), resin_fraction_df, row.names = NULL)
+
+# Write both dataframes to the same Excel file
+write_xlsx(list("Resin Tonnage" = converted_resin_final_df, "Resin Fraction" = resin_fraction_df),
+           path = "CalRecycle Plastic Waste by Resin and Year.xlsx",
+           col_names = TRUE)
+```
+
+
