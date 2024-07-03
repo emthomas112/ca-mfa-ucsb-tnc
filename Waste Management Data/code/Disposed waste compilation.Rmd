@@ -1,0 +1,238 @@
+---
+title: "Disposed waste compilation"
+author: "E.M.Thomas"
+date: "2024-07-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+library(writexl)
+```
+
+
+```{r}
+# Read in Statewide disposed waste by resin from Waste Management Workbook_240625
+statewide_disposal_raw <- read_xlsx(here("processed data/Statewide Disposed Waste by Resin .xlsx")) %>% 
+  clean_names() %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", ""))
+
+# read in business group data by resin 
+bg_resin_df <- read_xlsx(here("processed data/WCS Business Group by Resin_240701.xlsx")) %>% 
+  clean_names() %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(ton_type == "tons_disposed") #filter for only disposed tons to match residential
+
+### Read in resin classification conversion table
+resin_conversion_df <- read_excel(here("raw data/Resin Conversion.xlsx")) %>% 
+  clean_names() %>% 
+  rename(material_type = cal_recycle_classification) %>% 
+  rename(resin_type = milbrandt_classification) 
+
+### read in residential waste
+res_material_type_df <- read.csv(here("old/Residential Total Waste by County.csv")) %>% 
+  mutate(county = gsub("\\(Countywide\\)$", "", county)) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  mutate(business_group_name = "Singlefamily residential") %>% 
+  rename(tons_disposed = total_residential_tons)
+  
+
+```
+
+
+```{r}
+resin_conversion_func_3 <- function(material_type_df, resin_conversion_df) {
+  resin_conversion <- resin_conversion_df$resin_type
+  resin_material <- resin_conversion_df$material_type
+  
+  # Assign the milbrandt resin classifications to each material type  
+  material_type_df$resin_conversion <- sapply(material_type_df$material_type, function(mat) {
+    resin <- resin_conversion[resin_material == mat]
+    if (length(resin) > 0) {
+      return(resin)
+    } else {
+      return("Other")
+    }
+  })
+  
+  # Function to process each column
+  process_column <- function(column_name) {
+    df <- material_type_df %>%
+      select(county, business_group_name, resin_conversion, all_of(column_name)) %>%
+      group_by(county, business_group_name, resin_conversion) %>%
+      summarise(value = sum(.data[[column_name]], na.rm = TRUE), .groups = "drop") %>%
+      pivot_wider(names_from = resin_conversion, values_from = value, values_fill = list(value = 0)) %>%
+      ungroup() %>%
+      mutate(across(!c(county, business_group_name), as.numeric)) %>% 
+      rename(pet = PETbc, hdpe = HDPEbc) %>% 
+      clean_names()
+    
+    # Initialize missing columns with zero if they don't exist
+    if (!"pp" %in% colnames(df)) df$pp <- 0
+    if (!"mp" %in% colnames(df)) df$mp <- 0
+    if (!"fwb" %in% colnames(df)) df$fwb <- 0
+    if (!"dp" %in% colnames(df)) df$dp <- 0
+    if (!"rc" %in% colnames(df)) df$rc <- 0
+    
+    df <- df %>%
+      mutate(
+        PET = pet + dp * 0.046 + rc * 0.08,
+        HDPE = hdpe + fwb * 0.17 + dp * 0.114 + rc * 0.12,
+        PP = pp + mp * 0.65 + fwb * 0.1 + dp * 0.336 + rc * 0.30,
+        LDPE_LLDPE = mp * 0.1 + fwb * 0.69 + dp * 0.15 + rc * 0.18,
+        PVC = mp * 0.025 + fwb * 0.013 + dp * 0.018 + rc * 0.036,
+        Other_Resins = dp * 0.279 + rc * 0.194,
+        PS = mp * 0.225 + fwb * 0.027 + dp * 0.057 + rc * 0.09
+      ) %>%
+      select(county, business_group_name, PET, HDPE, PP, LDPE_LLDPE, PVC, Other_Resins, PS) %>%
+      mutate(ton_type = column_name)  # Add the ton type as a column
+    
+    return(df)
+  }
+  
+  # Process each column and combine results
+  columns_to_process <- c("tons_disposed")
+  results_list <- lapply(columns_to_process, process_column)
+  
+  combined_results <- bind_rows(results_list)
+  
+  return(combined_results)
+}
+```
+
+```{r}
+### convert residential waste to resin 
+res_resin_df <- resin_conversion_func_3(res_material_type_df, resin_conversion_df) %>% 
+  clean_names()
+
+```
+
+
+```{r}
+### merge bg and res resin 
+sector_disposed_resin_df <- rbind(bg_resin_df, res_resin_df) %>% 
+  select(!ton_type) %>% 
+  arrange(county)
+```
+
+```{r}
+# take proportions of each business_group_name by county
+
+# Calculate the total sum of each resin type by county
+sector_disposed_summarized <- sector_disposed_resin_df %>%
+  group_by(county) %>%
+  summarise(across(pet:ps, sum, na.rm = TRUE), .groups = "drop") %>%
+  rename_with(~ paste0("total_", .), pet:ps) 
+
+# Join the total sums back to the original dataframe
+sector_disposed_resin_with_totals <- sector_disposed_resin_df %>%
+  left_join(sector_disposed_summarized, by = "county") 
+
+# Calculate the proportions for each business_group_name by county
+sector_disposed_resin_proportions <- sector_disposed_resin_with_totals %>%
+  mutate(across(pet:ps, ~ . / get(paste0("total_", cur_column())), .names = "prop_{.col}")) %>% 
+  select(county, business_group_name, starts_with("prop_")) %>% 
+  rename_with(~ gsub("prop_", "", .), starts_with("prop_")) 
+
+```
+
+
+```{r}
+### combine sector proportions to statewide disposed waste time series
+
+# Merge the proportion data with the statewide disposal data
+statewide_disposal_with_proportions <- statewide_disposal_raw %>%
+  left_join(ca_disposed_resin_proportions, by = "county")
+
+# Calculate the resin tons for each business group by multiplying the resin columns by the corresponding proportions
+county_disposal_by_sector <- statewide_disposal_with_proportions %>%
+  mutate(
+    pet_tons_sector = pet_tons * pet,
+    hdpe_tons_sector = hdpe_tons * hdpe,
+    pp_tons_sector = pp_tons * pp,
+    ldpe_lldpe_tons_sector = ldpe_lldpe_tons * ldpe_lldpe,
+    pvc_tons_sector = pvc_tons * pvc,
+    other_resins_tons_sector = other_resins_tons * other_resins,
+    ps_tons_sector = ps_tons * ps
+  ) %>%
+  select(
+    year, county, business_group_name, population, region,
+    pet_tons_sector, hdpe_tons_sector, pp_tons_sector, ldpe_lldpe_tons_sector, pvc_tons_sector, other_resins_tons_sector, ps_tons_sector
+  )
+
+# Reshape the data to have a breakdown of resin tons for each sector by county and year
+county_disposal_by_sector_long <- county_disposal_by_sector %>%
+  pivot_longer(
+    cols = starts_with("pet_tons_sector"):starts_with("ps_tons_sector"),
+    names_to = "resin_type",
+    values_to = "tons"
+  )
+```
+
+
+```{r}
+write_xlsx(list("County Sector Resin 2014" = sector_disposed_resin_df,"County Sector Resin Proportions" = sector_disposed_resin_proportions, "County Year Resin" = statewide_disposal_raw,"Sector County Year Resin"=county_disposal_by_sector), here("processed data/Disposed Waste by Sector County Year Resin.xlsx"))
+```
+
+
+### VISUALIZATIONS
+```{r}
+# Time series plot of resin tons by sector and year
+plot_time_series <- ggplot(county_disposal_by_sector_long, aes(x = year, y = tons, color = resin_type)) +
+  geom_line() +
+  facet_wrap(~ business_group_name, scales = "free_y") +
+  labs(title = "Time Series of Resin Tons by Sector and Year",
+       x = "Year",
+       y = "Tons",
+       color = "Resin Type") +
+  theme_minimal()
+
+print(plot_time_series)
+```
+
+```{r}
+# Filter data for a specific year (e.g., 2020)
+data_2014 <- county_disposal_by_sector_long %>%
+  filter(year == 2014)
+
+# Stacked bar plot of resin distribution by sector in 2020
+plot_stacked_bar_2014 <- ggplot(data_2014, aes(x = business_group_name, y = tons, fill = resin_type)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Resin Distribution by Sector in 2014",
+       x = "Sector",
+       y = "Tons",
+       fill = "Resin Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(plot_stacked_bar_2014)
+```
+
+```{r}
+# Filter data for a specific year (e.g., 2020) and exclude "Singlefamily residential"
+data_2014_excl_sf <- county_disposal_by_sector_long %>%
+  filter(year == 2014 & business_group_name != "Singlefamily residential")
+
+# Stacked bar plot of resin distribution by sector in 2020, excluding "Singlefamily residential"
+plot_stacked_bar_2014_excl_sf <- ggplot(data_2014_excl_sf, aes(x = business_group_name, y = tons, fill = resin_type)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Resin Distribution by Sector in 2014 (Excluding Singlefamily Residential)",
+       x = "Sector",
+       y = "Tons",
+       fill = "Resin Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(plot_stacked_bar_2014_excl_sf)
+```
+
+
+
+
+

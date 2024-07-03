@@ -14,6 +14,7 @@ library(here)
 library(janitor)
 library(stringr)
 library(writexl)
+library(zoo)
 ```
 
 
@@ -81,7 +82,7 @@ unique_counties <- as.data.frame(unique(combined_df$file_name)) # Sutter is miss
 
 ```{r}
 ### read in rdrs report 1 data to get 2020 
-rdrs_df <- read_excel(here("processed data/RDRS Report 1 Data Summarized_MT.xlsx"))
+rdrs_df <- read_excel(here("processed data/RDRS Report 1 Data Summarized.xlsx"))
 
 rdrs_2020 <- rdrs_df %>% 
   filter(year == 2020) %>% 
@@ -166,31 +167,31 @@ combined_final_df <- rbind(combined_clean, rdrs_2020_fractions) %>%
 
 
 ### VISUALIZATIONS
+##### Total waste per capita
 ```{r}
-# Plot total_ton time series by county
-plot1 <- ggplot(combined_final_df, aes(x = year, y = total_ton, color = county)) +
+
+manual_peaks <- data.frame(
+  county = c("tehama", "lake", "calaveras", "trinity","shasta", "glenn", "butte"),
+  year = c(2011, 2015, 2016, 2017, 2018, 2019, 2019),
+  total_ton_per_capita = c(2.93, 2.65, 2.86, 1.87, 3.18, 2.58, 7.47)
+)
+
+# Add labels for the peaks
+manual_peaks$label <- paste(manual_peaks$county, round(manual_peaks$total_ton_per_capita, 2), sep = ": ")
+  
+
+plot1 <- ggplot(combined_final_df, aes(x = year, y = total_ton/population, color = county)) +
   geom_line() +
-  labs(title = "Total Disposed Waste Time Series by County", x = "Year", y = "Total Disposed Waste (metric tons)") +
+  geom_point(data = manual_peaks, aes(x = year, y = total_ton_per_capita), color = "red", size = 3) +
+  geom_text(data = manual_peaks, aes(x = year, y = total_ton_per_capita, label = label),
+            vjust = -1, size = 3, color = "black") +
+  labs(title = "Total Disposed Waste Time Series by County", 
+       x = "Year", 
+       y = "Total Disposed Waste (metric tons per capita)") +
   theme_minimal() +
   theme(legend.position = "none")
 
 plot1
-```
-
-
-```{r}
-# Plot total_ton time series by county
-total_waste_pc <- combined_final_df %>% 
-  mutate(waste_pc = total_ton/population) 
-
-## big spike is Butte county, 2019, checked raw data, big spike in Q2 ??? order of magnitude more 
-plot2 <- ggplot(total_waste_pc, aes(x = year, y = waste_pc, color = county)) +
-  geom_line() +
-  labs(title = "Total Disposed Waste per Capita by County", x = "Year", y = "Total Disposed Waste per Capita (metric tons)") +
-  theme_minimal() + 
-  theme(legend.position = "none")
-
-plot2
 ```
 
 
@@ -241,7 +242,33 @@ plastic_disposal_df <- combined_final_df %>%
   mutate(ps_ton = disposal_ton * ps) %>% 
   select(year, county, region, population, disposal_ton, pet_ton, hdpe_ton, pp_ton, ldpe_lldpe_ton, pvc_ton, other_resins_ton, ps_ton)
   
+# Aggregate the resin data across all counties for each year
+statewide_resin_totals <- plastic_disposal_df %>%
+  group_by(year) %>%
+  summarise(
+    pet_ton = sum(pet_ton, na.rm = TRUE),
+    hdpe_ton = sum(hdpe_ton, na.rm = TRUE),
+    pp_ton = sum(pp_ton, na.rm = TRUE),
+    ldpe_lldpe_ton = sum(ldpe_lldpe_ton, na.rm = TRUE),
+    pvc_ton = sum(pvc_ton, na.rm = TRUE),
+    other_resins_ton = sum(other_resins_ton, na.rm = TRUE),
+    ps_ton = sum(ps_ton, na.rm = TRUE)
+  )
 
+# Reshape the data to a long format
+statewide_resin_long <- statewide_resin_totals %>%
+  pivot_longer(cols = pet_ton:ps_ton, names_to = "resin_type", values_to = "tons")
+
+# Create the time series plot
+plot2 <- ggplot(statewide_resin_long, aes(x = year, y = tons, color = resin_type)) +
+  geom_line() +
+  labs(title = "Statewide Disposal by Resin Type", 
+       x = "Year", 
+       y = "Disposed Tons",
+       color = "Resin Type") +
+  theme_minimal()
+
+plot2
 ```
 
 

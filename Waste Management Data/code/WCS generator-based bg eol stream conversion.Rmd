@@ -55,16 +55,9 @@ resin_conversion_df <- read_excel(here("raw data/Resin Conversion.xlsx")) %>%
   rename(material_type = cal_recycle_classification) %>% 
   rename(resin_type = milbrandt_classification) 
 
-# Remove unneeded columns, separate out multifamily units
+# Remove unneeded columns
 bg_material_type_df_clean <- bg_material_type_df_raw %>% 
-  select(county, business_group_name, material_type, employee_count, tons_curbside_organics, tons_curbside_recycle, tons_other_diversion, tons_disposed, tons_total_generation) %>% 
-  filter(business_group_name != "Multifamily")  %>%
-  mutate(across(starts_with("tons"), ~ .x / 1.102))
-
-# Maybe multifamily proportions can be used to estimate single family residences?
-multifamily_material_type_df <- bg_material_type_df_raw %>% 
-  select(county, business_group_name, material_type, occupied_multifamily_units, tons_curbside_organics, tons_curbside_recycle, tons_other_diversion, tons_disposed, tons_total_generation) %>% 
-  filter(business_group_name == "Multifamily")  %>%
+  select(county, business_group_name, material_type, tons_curbside_organics, tons_curbside_recycle, tons_other_diversion, tons_disposed, tons_total_generation) %>%
   mutate(across(starts_with("tons"), ~ .x / 1.102))
 
 # Convert Material Type to Resin Type
@@ -85,12 +78,12 @@ resin_conversion_func_new <- function(bg_material_type_df, resin_conversion_df) 
   # Function to process each column
   process_column <- function(column_name) {
     df <- bg_material_type_df %>%
-      select(county, business_group_name, employee_count, resin_conversion, all_of(column_name)) %>%
-      group_by(county, business_group_name, employee_count, resin_conversion) %>%
+      select(county, business_group_name, resin_conversion, all_of(column_name)) %>%
+      group_by(county, business_group_name,  resin_conversion) %>%
       summarise(value = sum(.data[[column_name]], na.rm = TRUE), .groups = "drop") %>%
       pivot_wider(names_from = resin_conversion, values_from = value, values_fill = list(value = 0)) %>%
       ungroup() %>%
-      mutate(across(!c(county, business_group_name, employee_count), as.numeric)) %>% 
+      mutate(across(!c(county, business_group_name), as.numeric)) %>% 
       rename(pet = PETbc, hdpe = HDPEbc) %>% 
       clean_names()
     
@@ -111,7 +104,7 @@ resin_conversion_func_new <- function(bg_material_type_df, resin_conversion_df) 
         Other_Resins = dp * 0.279 + rc * 0.194,
         PS = mp * 0.225 + fwb * 0.027 + dp * 0.057 + rc * 0.09
       ) %>%
-      select(county, business_group_name, employee_count, PET, HDPE, PP, LDPE_LLDPE, PVC, Other_Resins, PS) %>%
+      select(county, business_group_name, PET, HDPE, PP, LDPE_LLDPE, PVC, Other_Resins, PS) %>%
       mutate(ton_type = column_name)  # Add the ton type as a column
     
     return(df)
@@ -127,13 +120,12 @@ resin_conversion_func_new <- function(bg_material_type_df, resin_conversion_df) 
 }
 
 # Apply the function to your new dataframe
-converted_resin_df <- resin_conversion_func_new(bg_material_type_df_clean, resin_conversion_df)
+bg_resin_df <- resin_conversion_func_new(bg_material_type_df_clean, resin_conversion_df)
 ```
 
 ```{r}
-write_xlsx(converted_resin_df, here("processed data/WCS Business Group by Resin.xlsx"))
+#write_xlsx(bg_resin_df, here("processed data/WCS Business Group by Resin_240701.xlsx"))
 ```
-
 
 
 
