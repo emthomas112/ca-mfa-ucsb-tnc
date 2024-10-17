@@ -1,0 +1,168 @@
+---
+title: "ComTrade"
+author: "E.M.Thomas"
+date: "2024-09-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+library(writexl)
+library(broom)
+library(zoo)
+```
+
+### ComTrade
+```{r}
+comtrade_raw <- read_excel("~/Documents/CA-MFA/CA-MFA Data/ca-mfa-ucsb-tnc/IO Consumption Model/data/raw data/ComTrade/comtrade_39xx_2010_2021.xlsx") 
+
+comtrade_clean <- comtrade_raw %>% 
+  select(period, reporterDesc, flowDesc, cmdCode, cmdDesc, netWgt, isNetWgtEstimated, primaryValue) %>% 
+  clean_names() %>% 
+  rename(year = period) %>% 
+  rename(description = cmd_desc) %>% 
+  filter(net_wgt > 0) %>% 
+  mutate(ton = net_wgt/1000) %>% 
+  mutate(intensity_usd_ton = primary_value / ton) 
+
+```
+
+```{r}
+# Calculate the average intensity for each cmd_code and year
+### year columns
+comtrade_avg_intensity <- comtrade_clean %>%
+  group_by(cmd_code, year) %>%  # Group only by cmd_code and year
+  summarise(avg_intensity_usd_ton = mean(intensity_usd_ton, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(desc(year)) %>%  # Sort by year in ascending order
+  pivot_wider(names_from = year, values_from = avg_intensity_usd_ton) %>% 
+  left_join(select(comtrade_clean, cmd_code, description) %>% distinct(), by = "cmd_code") %>%
+  relocate(description, .after = cmd_code)  # Place description right after cmd_code
+
+### code columns
+comtrade_avg_intensity_transposed <- comtrade_clean %>%
+  group_by(cmd_code, year) %>%  # Group by cmdCode and year
+  summarise(avg_intensity_usd_ton = mean(intensity_usd_ton, na.rm = TRUE)) %>%  # Calculate average intensity
+  pivot_wider(names_from = cmd_code, values_from = avg_intensity_usd_ton) %>% 
+  arrange(desc(year))
+```
+
+###USITC
+
+##### Import for consumption / first unit of quantity (FUQ)
+Downloaded in this unit
+```{r}
+usitc_import_consump_fuq_raw <- read_excel("~/Documents/CA-MFA/CA-MFA Data/ca-mfa-ucsb-tnc/IO Consumption Model/data/raw data/USITC/usitc_import_consump_fuq_2010_2021.xlsx",2) %>% 
+  clean_names()
+
+# Filter for only plastic-specific codes
+usitc_plastic_only <- usitc_import_consump_fuq_raw %>%
+  select(naic_number, description) %>%  # Select the relevant columns
+  distinct() %>% 
+  filter(naic_number %in% c(326121, 326100, 326111, 326113, 326122, 326160, 326191))
+
+
+usitc_import_consump_fuq_clean <- usitc_import_consump_fuq_raw %>%
+  filter(quantity_description == "kilograms") %>%
+  filter(naic_number %in% usitc_plastic_only$naic_number) %>%  # Filter for only plastic-specific codes
+  select(-data_type) %>% 
+  pivot_longer(cols = starts_with("year_"),  # Pivot all columns starting with "year_"
+               names_to = "year",            # New column for year
+               names_prefix = "year_",       # Remove the "year_" prefix from column names
+               values_to = "intensity_usd_kg") %>%  # New column for intensity values
+  mutate(year = as.numeric(year)) %>%   # Convert the year column to numeric for proper sorting
+  filter(intensity_usd_kg != "N/A") %>% 
+  mutate(intensity_usd_kg = as.numeric(intensity_usd_kg)) %>% 
+  filter(intensity_usd_kg > 0) %>% 
+  mutate(intensity_usd_ton = intensity_usd_kg * 1000) %>% 
+  select(-intensity_usd_kg) 
+  
+# Calculate the average intensity for each naic_number and year
+usitc_avg_import_consump_fuq <- usitc_import_consump_fuq_clean %>%
+  group_by(year, naic_number) %>%  # Group by year and naic_number
+  summarise(avg_intensity_usd_ton = mean(intensity_usd_ton, na.rm = TRUE)) %>%   # Calculate the average intensity
+  ungroup() %>%
+  arrange(desc(year)) %>% 
+  pivot_wider(names_from = year, values_from = avg_intensity_usd_ton) %>%
+  left_join(select(usitc_plastic_only, naic_number, description), by = "naic_number") %>%
+  relocate(description, .after = naic_number) %>%
+  select(naic_number, description, sort(tidyselect::everything()))  # Sort the columns by year)
+
+```
+
+
+#### CIF / metric ton 
+```{r}
+cif_raw <- read_excel("~/Documents/CA-MFA/CA-MFA Data/ca-mfa-ucsb-tnc/IO Consumption Model/data/raw data/USITC/usitc_cif_import_2010_2021.xlsx",2) %>% 
+  clean_names()
+
+fuq_raw <- read_excel("~/Documents/CA-MFA/CA-MFA Data/ca-mfa-ucsb-tnc/IO Consumption Model/data/raw data/USITC/usitc_first_unit_quantity_2010_2021.xlsx",2) %>% 
+  clean_names()
+
+# Pivot the year columns longer
+cif_long <- cif_raw %>%
+  pivot_longer(cols = starts_with("year_"),  # Select all columns that start with 'year_'
+               names_to = "year",           # Name the new column for years
+               names_prefix = "year_",      # Remove the 'year_' prefix
+               values_to = "cif")  %>%        # Name the column for the corresponding values
+  select(-data_type, -description)
+
+# Pivot the year columns longer
+fuq_long <- fuq_raw %>%
+  pivot_longer(cols = starts_with("year_"),  # Select all columns that start with 'year_'
+               names_to = "year",           # Name the new column for years
+               names_prefix = "year_",      # Remove the 'year_' prefix
+               values_to = "quantity") %>%      # Name the column for the corresponding values
+  select(-data_type)
+
+# Merge the two datasets by the specified columns
+usitc_cif_fuq_merge <- fuq_long %>%
+  inner_join(cif_long, by = c("country", "year", "naic_number", "district")) %>% 
+  filter(quantity_description == "kilograms") %>%
+  mutate(tons = quantity/1000) %>% 
+  filter(cif > 0) %>% 
+  filter(tons > 0) %>% 
+  mutate(intensity_usd_ton = cif / tons) %>% 
+  filter(naic_number %in% usitc_plastic_only$naic_number)  # Filter for only plastic-specific codes
+  
+# Calculate the average intensity for each naic_number and year
+usitc_avg_cif_fuq_intensity <- usitc_cif_fuq_merge %>%
+  group_by(year, naic_number) %>%  # Group by year and naic_number
+  summarise(avg_intensity_usd_ton = mean(intensity_usd_ton, na.rm = TRUE))  # Calculate the average intensity
+
+# Pivot wider to get naic_number as columns and year as rows
+usitc_avg_cif_fuq_wide <- usitc_avg_cif_fuq_intensity %>%
+  pivot_wider(names_from = naic_number, values_from = avg_intensity_usd_ton)
+
+# Calculate the average intensity for each naic_number and year
+usitc_avg_cif_fuq_intensity_transposed <- usitc_cif_fuq_merge %>%
+  group_by(naic_number, year) %>%
+  summarise(avg_intensity_usd_ton = mean(intensity_usd_ton, na.rm = TRUE)) %>%
+  ungroup() %>%
+  arrange(desc(year)) %>% 
+  pivot_wider(names_from = year, values_from = avg_intensity_usd_ton) %>%
+  left_join(select(usitc_plastic_only, naic_number, description), by = "naic_number") %>%
+  relocate(description, .after = naic_number) %>%
+  select(naic_number, description, sort(tidyselect::everything()))  # Sort the columns by year
+
+
+```
+
+
+### write to excel
+```{r}
+write_xlsx(list("ComTrade 2010_2021" = comtrade_clean, "ComTrade Avg Intensity" = comtrade_avg_intensity, "USITC CIF_FUQ 2010_2021" = usitc_cif_fuq_merge, "USITC CIF_FUQ Avg Intensity" = usitc_avg_cif_fuq_intensity_transposed, "USITC Import_Consump_FUQ" = usitc_import_consump_fuq_clean, "USITC Import_Consump Avg Int." = usitc_avg_import_consump_fuq), here("IO Consumption Model/data/processed data/Processed Trade Data.xlsx"))
+```
+
+
+
+

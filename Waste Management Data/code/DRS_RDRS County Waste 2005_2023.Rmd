@@ -1,0 +1,309 @@
+---
+title: "DRS data"
+author: "E.M.Thomas"
+date: "2024-05-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(tidyverse)
+library(here)
+library(janitor)
+library(stringr)
+library(writexl)
+library(zoo)
+```
+
+### Combine and process RDS 2005 - 2019 total disposed waste data by county
+```{r}
+### Data from https://www2.calrecycle.ca.gov/LGCentral/DisposalReporting/Origin/CountywideSummary
+
+# Set working directory
+setwd(here("raw data/CalRecycle/DRS/DRS County Origin Flow"))
+
+# List all Excel files in the directory
+excel_files <- list.files(pattern = "^CountywideSummary.*\\.xlsx$", full.names = TRUE)
+
+# Create an empty list to store dataframes
+dfs <- list()
+
+# Loop through each Excel file, read it, and process it
+for (file in excel_files) {
+  cat("Processing file:", file, "\n")
+  
+  # Read in raw data, origin flow
+  df <- read_excel(file, skip = 3) %>%
+    clean_names() %>%
+    slice(-n())
+  
+  
+  # Ensure the expected columns are present
+  required_columns <- c("report_year", "diposal_ton", "export_ton", "transformation_ton", "total_adc")
+  missing_columns <- setdiff(required_columns, names(df))
+  
+  if (length(missing_columns) > 0) {
+    cat("Warning: Missing columns in", file, ":", missing_columns, "\n")
+    next
+  }
+  
+  # Pull yearly data, remove everything else
+  df <- df %>% 
+    filter(!is.na(report_year)) %>%
+    select(report_year, diposal_ton, export_ton, transformation_ton, total_adc) %>%
+    mutate(across(c(report_year, diposal_ton, export_ton, transformation_ton, total_adc), ~as.numeric(.))) %>%
+    filter(report_year >= 2005) %>%
+    mutate(across(everything(), ~replace_na(., 0))) %>%
+    arrange(desc(report_year))
+  
+  # Add the processed dataframe to the list
+  dfs[[file]] <- df
+}
+
+# Check if the list dfs is empty
+if (length(dfs) == 0) {
+  stop("No dataframes were created. Please check the Excel files.")
+}
+
+# Combine all dataframes into one
+combined_df <- bind_rows(dfs, .id = "file_name")
+
+
+# Optionally, remove the file path from the file_name column
+combined_df <- combined_df %>%
+  mutate(file_name = basename(file_name))
+```
+
+
+```{r}
+# Clean up combined_df 
+combined_clean <- combined_df %>%
+  rename(disposal_ton = diposal_ton) %>% 
+  rename(year = report_year) %>% 
+  mutate(across(c(disposal_ton, export_ton, transformation_ton, total_adc), ~ . / 1.102)) %>% 
+  mutate(county = str_replace(file_name, "CountywideSummary_(.*)\\.xlsx$", "\\1")) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton) 
+
+
+```
+
+
+
+```{r}
+unique_counties <- as.data.frame(unique(combined_df$file_name)) # Sutter is missing, checked raw data, there is no record... 
+```
+
+
+
+
+```{r}
+# read in county regions from WCS 
+counties_by_region <- read_excel(here("raw data/Counties by Region.xlsx")) %>% 
+  pivot_longer(everything(), names_to = "region", values_to = "county") %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", ""))
+
+# read in county population
+county_population <- read_excel(here("raw data/County Population by Year.xlsx")) %>% 
+  clean_names() %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", ""))
+  
+```
+
+
+
+### Add in 2020-2023 RDRS data
+
+```{r}
+### read in rdrs report 1 data to get 2020 
+#### check that sutter is missing for years other than 2020
+rdrs_df <- read_excel(here("processed data/RDRS Report 1 Data Summarized_v2.xlsx"))
+
+rdrs_2019_q34 <- rdrs_df %>% 
+  filter(year == 2019) %>% 
+  select(1:5) %>% 
+  rename(disposal_ton = 3) %>% 
+  rename(transformation_ton = 4) %>% 
+  rename(emsw = 5) %>% 
+  mutate(transformation_ton = transformation_ton + emsw) %>% 
+  select(!emsw) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(county != 'sutter') #removing sutter for now bc it's not included in DRS
+
+rdrs_2020 <- rdrs_df %>% 
+  filter(year == 2020) %>% 
+  select(1:5) %>% 
+  rename(disposal_ton = 3) %>% 
+  rename(transformation_ton = 4) %>% 
+  rename(emsw = 5) %>% 
+  mutate(transformation_ton = transformation_ton + emsw) %>% 
+  select(!emsw) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(county != 'sutter') #removing sutter for now bc it's not included in DRS
+  
+rdrs_2021 <- rdrs_df %>% 
+  filter(year == 2021) %>% 
+  select(1:5) %>% 
+  rename(disposal_ton = 3) %>% 
+  rename(transformation_ton = 4) %>% 
+  rename(emsw = 5) %>% 
+  mutate(transformation_ton = transformation_ton + emsw) %>% 
+  select(!emsw) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(county != 'sutter')
+
+rdrs_2022 <- rdrs_df %>% 
+  filter(year == 2022) %>% 
+  select(1:5) %>% 
+  rename(disposal_ton = 3) %>% 
+  rename(transformation_ton = 4) %>% 
+  rename(emsw = 5) %>% 
+  mutate(transformation_ton = transformation_ton + emsw) %>% 
+  select(!emsw) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(county != 'sutter')
+
+
+rdrs_2023 <- rdrs_df %>% 
+  filter(year == 2023) %>% 
+  select(1:5) %>% 
+  rename(disposal_ton = 3) %>% 
+  rename(transformation_ton = 4) %>% 
+  rename(emsw = 5) %>% 
+  mutate(transformation_ton = transformation_ton + emsw) %>% 
+  select(!emsw) %>% 
+  mutate(county = str_replace_all(str_trim(tolower(county)), "\\s+", "")) %>% 
+  filter(county != 'sutter')
+
+
+### This is to get the 2020-2023 data in the same format as the 2005-2019 data
+
+### take proportion of exported waste in 2019 of disposed waste + exported
+export_fraction <- combined_clean %>% 
+  select(year, county, disposal_ton, export_ton) %>% 
+  filter(year == 2019) %>% 
+  mutate(export_disposal = disposal_ton + export_ton) %>% 
+  mutate(export_fraction = export_ton / export_disposal) %>% 
+  mutate(disposal_fraction = disposal_ton / export_disposal) %>% 
+  mutate(math_check = export_fraction + disposal_fraction) %>% 
+  select(county, disposal_fraction, export_fraction)
+
+
+### apply fractions to 2020-2023 data 
+
+rdrs_2019_q34_fractions <- rdrs_2020 %>% 
+  select(county, disposal_ton, transformation_ton) %>% 
+  left_join(export_fraction, by='county') %>% 
+  mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
+  mutate(export_ton = disposal_ton * export_fraction) %>% 
+  mutate(year = 2019) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton)
+
+rdrs_2020_fractions <- rdrs_2020 %>% 
+  select(county, disposal_ton, transformation_ton) %>% 
+  left_join(export_fraction, by='county') %>% 
+  mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
+  mutate(export_ton = disposal_ton * export_fraction) %>% 
+  mutate(year = 2020) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton)
+
+
+rdrs_2021_fractions <- rdrs_2021 %>% 
+  select(county, disposal_ton, transformation_ton) %>% 
+  left_join(export_fraction, by='county') %>% 
+  mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
+  mutate(export_ton = disposal_ton * export_fraction) %>% 
+  mutate(year = 2021) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton)
+  
+
+rdrs_2022_fractions <- rdrs_2022 %>% 
+  select(county, disposal_ton, transformation_ton) %>% 
+  left_join(export_fraction, by='county') %>% 
+  mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
+  mutate(export_ton = disposal_ton * export_fraction) %>% 
+  mutate(year = 2022) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton)
+
+rdrs_2023_fractions <- rdrs_2023 %>% 
+  select(county, disposal_ton, transformation_ton) %>% 
+  left_join(export_fraction, by='county') %>% 
+  mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
+  mutate(export_ton = disposal_ton * export_fraction) %>% 
+  mutate(year = 2023) %>% 
+  select(year, county, disposal_ton, export_ton, transformation_ton)
+
+
+### add to combined_clean
+combined_final_df <- rbind(combined_clean, rdrs_2020_fractions, 
+                           rdrs_2021_fractions,
+                           rdrs_2022_fractions, 
+                           rdrs_2023_fractions) %>% 
+  mutate(total_ton = disposal_ton + export_ton + transformation_ton) %>% 
+  left_join(counties_by_region, by="county") %>% 
+  left_join(county_population, by = c("county", "year")) %>% 
+  arrange(desc(year)) %>% 
+  select(year, county, region, population, disposal_ton, export_ton, transformation_ton, total_ton)
+```
+
+
+### VISUALIZATIONS
+##### Total waste per capita
+```{r}
+
+manual_peaks <- data.frame(
+  county = c("tehama", "lake", "calaveras", "trinity","shasta", "glenn", "butte"),
+  year = c(2011, 2015, 2016, 2017, 2018, 2019, 2019),
+  total_ton_per_capita = c(2.93, 2.65, 2.86, 1.87, 3.18, 2.58, 7.47)
+)
+
+# Add labels for the peaks
+manual_peaks$label <- paste(manual_peaks$county, round(manual_peaks$total_ton_per_capita, 2), sep = ": ")
+  
+
+plot1 <- ggplot(combined_final_df, aes(x = year, y = total_ton/population, color = county)) +
+  geom_line() +
+  geom_point(data = manual_peaks, aes(x = year, y = total_ton_per_capita), color = "red", size = 3) +
+  geom_text(data = manual_peaks, aes(x = year, y = total_ton_per_capita, label = label),
+            vjust = -1, size = 3, color = "black") +
+  labs(title = "Total Disposed Waste Time Series by County", 
+       x = "Year", 
+       y = "Total Disposed Waste (metric tons per capita)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+plot1
+```
+
+
+```{r}
+# Transform the data into a long format for ton columns by region
+combined_by_region <- combined_final_df %>%
+  pivot_longer(cols = c(disposal_ton, export_ton, transformation_ton, total_ton),
+               names_to = "ton_type", values_to = "ton_value") %>% 
+  group_by(region, year, ton_type) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE), .groups = 'drop') %>% 
+  mutate(ton_pc = ton_value/population)
+
+# Plot the time series for different ton types by region
+ggplot(combined_by_region, aes(x = year, y = ton_pc, color = region)) +
+  geom_line() +
+  facet_wrap(~ ton_type, scales = "free_y") +
+  labs(title = "Tons per Capita by Region and Ton Type",
+       x = "Year",
+       y = "Tons per Capita") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+
+```{r}
+write_xlsx(combined_final_df, here("processed data/RDS_RDRS Managed Waste by County 2005_2023.xlsx"))
+```
+
+```{r}
+write_xlsx(rdrs_2019_q34_fractions, here("processed data/RDRS 2019 Q3_Q4.xlsx"))
+```
+
