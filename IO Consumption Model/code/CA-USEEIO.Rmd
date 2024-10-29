@@ -1,0 +1,116 @@
+---
+title: "CA-USEEIO"
+author: "E.M.Thomas"
+date: "2024-10-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(here)
+library(tidyverse)
+library(dplyr)
+```
+
+
+```{r}
+# Define plastic intensity in $/metric ton
+plastic_intensity <- 1752
+
+# List of years for iteration
+years <- c(12, 13, 14, 15, 16, 17, 18, 19, 20)
+
+# Initialize dataframes to store results
+ca_plastic_consumption_df <- data.frame()
+total_ca_plastic_consumption_df <- data.frame(year = integer(), total_consumption = numeric())
+
+# Iterate over each year
+for (year in years) {
+  # Load CAEEIO model for the given year
+  file_path <- here(paste0("IO Consumption Model/data/raw data/ca-useeior/CAEEIOv1.0-s-", year, ".rds"))
+  caeeio <- readRDS(file_path)
+  
+  # Extract demand vector
+  demand_vector <- as.data.frame(caeeio[["DemandVectors"]][["vectors"]][[paste0("20", year, "_US-CA_Consumption_Complete")]]) %>% 
+    rename("final_demand" = 1) %>%
+    mutate(sector = row.names(.))
+  
+  # Extract "L" matrix and CA-326 producer row
+  L <- as.data.frame(caeeio[["L"]])
+  L_row_326 <- L["326/US-CA", , drop = FALSE]
+  
+  # Transpose and convert to dataframe
+  L_326_transposed <- as.data.frame(t(L_row_326)) %>%
+    mutate(sector = row.names(.)) %>%
+    rename("leontif_326" = 1)
+  
+  # Combine final demand and L into single dataframe
+  ca_plastic_consump <- left_join(L_326_transposed, demand_vector, by = "sector") %>%
+    select(sector, leontif_326, final_demand) %>%
+    mutate(ca_plastic_consumption = leontif_326 * final_demand / plastic_intensity)
+  
+  # Check if ca_plastic_consumption_df is empty for the first iteration
+  if (nrow(ca_plastic_consumption_df) == 0) {
+    ca_plastic_consumption_df <- ca_plastic_consump %>%
+      select(sector, ca_plastic_consumption) %>%
+      rename(!!paste0("ca_plastic_", year) := ca_plastic_consumption)
+  } else {
+    # Add ca_plastic_consumption to ca_plastic_consumption_df
+    ca_plastic_consumption_df <- ca_plastic_consumption_df %>%
+      full_join(ca_plastic_consump %>% select(sector, ca_plastic_consumption) %>%
+                  rename(!!paste0("ca_plastic_", year) := ca_plastic_consumption),
+                by = "sector")
+  }
+  
+  # Calculate total ca plastic consumption for the year
+  total_consumption <- sum(ca_plastic_consump$ca_plastic_consumption, na.rm = TRUE)
+  
+  # Add total consumption to total_ca_plastic_consumption_df
+  total_ca_plastic_consumption_df <- rbind(total_ca_plastic_consumption_df, 
+                                           data.frame(year = paste0("20", year), 
+                                                      total_consumption = total_consumption))
+}
+
+# Print results
+print(ca_plastic_consumption_df)
+print(total_ca_plastic_consumption_df)
+
+
+```
+
+
+
+```{r}
+# Define plastic intensity in $/metric ton
+plastic_intensity <- 1752
+
+# Load CAEEIO model
+caeeio_20 <- readRDS(here("IO Consumption Model/data/raw data/ca-useeior/CAEEIOv1.0-s-20.rds"))
+
+# Extract "2020_US-CA_Consumption_Complete" demand vector as a dataframe
+demand_vector_2020 <- as.data.frame(caeeio_20[["DemandVectors"]][["vectors"]][["2020_US-CA_Consumption_Complete"]]) %>% 
+  rename("final_demand" = 1) %>%
+  mutate(sector = row.names(.))  # Ensure sector column is added
+
+# Extract "L" matrix as a dataframe
+L_2020 <- as.data.frame(caeeio_20[["L"]])
+
+# Extract CA-326 producer row
+L_row_326_US_CA <- L_2020["326/US-CA", , drop = FALSE]
+
+# Transpose and convert to dataframe
+L_326_transposed <- as.data.frame(t(L_row_326_US_CA)) 
+
+# Add row names as sector column
+L_326_final <- L_326_transposed %>%
+  mutate(sector = row.names(.)) %>% 
+  rename("leontif_326" = 1)
+
+# Combine final demand and L into a single dataframe by matching on sector
+ca_plastic_consump_df <- left_join(L_326_final, demand_vector_2020, by = "sector") %>% 
+  select(sector, leontif_326, final_demand) %>% 
+  mutate(ca_plastic_consumption = leontif_326*final_demand/plastic_intensity)
+
+total_ca_plastic_consumption <- sum(ca_plastic_consump_df$ca_plastic_consumption)
+
+```

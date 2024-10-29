@@ -193,7 +193,7 @@ export_fraction <- combined_clean %>%
 
 ### apply fractions to 2020-2023 data 
 
-rdrs_2019_q34_fractions <- rdrs_2020 %>% 
+rdrs_2019_q34_fractions <- rdrs_2019_q34 %>% 
   select(county, disposal_ton, transformation_ton) %>% 
   left_join(export_fraction, by='county') %>% 
   mutate(disposal_ton = disposal_ton * disposal_fraction) %>% 
